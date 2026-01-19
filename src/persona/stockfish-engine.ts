@@ -134,10 +134,10 @@ export class StockfishEngine {
                     const mateMatch = line.match(/score mate (-?\d+)/);
                     const pvMatch = line.match(/pv (.+)/);
 
-                    if (depthMatch) result.depth = parseInt(depthMatch[1]);
-                    if (scoreMatch) result.evaluation = parseInt(scoreMatch[1]);
-                    if (mateMatch) result.evaluation = parseInt(mateMatch[1]) > 0 ? 10000 : -10000;
-                    if (pvMatch) result.pv = pvMatch[1].split(' ');
+                    if (depthMatch) result.depth = parseInt(depthMatch[1] ?? '0');
+                    if (scoreMatch) result.evaluation = parseInt(scoreMatch[1] ?? '0');
+                    if (mateMatch) result.evaluation = parseInt(mateMatch[1] ?? '0') > 0 ? 10000 : -10000;
+                    if (pvMatch) result.pv = pvMatch[1]?.split(' ') ?? [];
                 }
 
                 // Parse bestmove

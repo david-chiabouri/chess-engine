@@ -5,17 +5,16 @@
 import { GameController } from '../src/app/game-controller';
 import { ChessEngine } from '../src/chess-engine';
 import { ChessNotation } from '../src/chess-notation';
-import { PersonaAI } from '../src/persona/persona-ai';
-import { Persona, AGGRESSIVE_PERSONA, CAUTIOUS_PERSONA, CHAOTIC_PERSONA, BALANCED_PERSONA } from '../src/persona/persona';
+import { PersonaAI, AGGRESSIVE_AI, CAUTIOUS_AI, CHAOTIC_AI, BALANCED_AI } from '../src/persona/persona-ai';
 
 export class AIGameDemo extends GameController {
     private ai: PersonaAI;
     private playerColor: 1 | 2 = 1; // Player is White
 
-    constructor(persona: Persona = BALANCED_PERSONA) {
+    constructor(ai: PersonaAI = BALANCED_AI) {
         super();
-        this.ai = new PersonaAI({ persona });
-        this.inputBox.setLabel(` Play vs ${persona.name} AI - Enter Move (SAN) `);
+        this.ai = ai;
+        this.inputBox.setLabel(` Play vs ${ai.name} AI - Enter Move (SAN) `);
     }
 
     protected override handleCommand(cmd: string): void {
@@ -94,14 +93,15 @@ if (import.meta.main) {
     const args = process.argv.slice(2);
     const personaName = args[0]?.toLowerCase() ?? 'balanced';
 
-    let persona: Persona;
+    let ai: PersonaAI;
     switch (personaName) {
-        case 'aggressive': persona = AGGRESSIVE_PERSONA; break;
-        case 'cautious': persona = CAUTIOUS_PERSONA; break;
-        case 'chaotic': persona = CHAOTIC_PERSONA; break;
-        default: persona = BALANCED_PERSONA;
+        case 'aggressive': ai = AGGRESSIVE_AI; break;
+        case 'cautious': ai = CAUTIOUS_AI; break;
+        case 'chaotic': ai = CHAOTIC_AI; break;
+        default: ai = BALANCED_AI;
     }
 
-    const game = new AIGameDemo(persona);
+    const game = new AIGameDemo(ai);
     game.start();
 }
+
