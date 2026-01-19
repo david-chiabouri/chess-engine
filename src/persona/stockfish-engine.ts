@@ -1,11 +1,13 @@
 /**
  * Stockfish Engine Wrapper
  * 
- * Manages communication with the stockfish.js engine via UCI protocol.
+ * Uses Bun Worker to run Stockfish WASM in a separate thread.
+ * Communicates via UCI protocol.
  */
 
-import { spawn, type ChildProcess } from 'child_process';
-import { join } from 'path';
+import { Worker } from 'worker_threads';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 export interface StockfishOptions {
     skillLevel?: number;     // 0-20 (default: 20)
@@ -26,41 +28,42 @@ export interface AnalysisResult {
     }[];
 }
 
+type MessageHandler = (message: string) => void;
+
 export class StockfishEngine {
-    private process: ChildProcess | null = null;
+    private worker: Worker | null = null;
     private isReady: boolean = false;
-    private outputBuffer: string = '';
-    private resolvers: Map<string, (value: string) => void> = new Map();
+    private messageHandler: MessageHandler = () => { };
+    private pendingResolvers: ((line: string) => void)[] = [];
 
     /**
-     * Start the stockfish engine process
+     * Start the stockfish engine in a worker thread
      */
     public async start(): Promise<void> {
-        if (this.process) return;
+        if (this.worker) return;
 
-        // Use the stockfish binary from node_modules
-        const stockfishPath = require.resolve('stockfish/src/stockfish-nnue-16.js');
+        // Find the stockfish WASM file in node_modules
+        const stockfishPath = require.resolve('stockfish/src/stockfish-nnue-16-single.js');
 
-        this.process = spawn('node', [stockfishPath], {
-            stdio: ['pipe', 'pipe', 'pipe']
+        // Create a worker that loads stockfish
+        this.worker = new Worker(stockfishPath);
+
+        this.worker.on('message', (data: string) => {
+            this.handleMessage(data);
         });
 
-        this.process.stdout?.on('data', (data: Buffer) => {
-            this.handleOutput(data.toString());
+        this.worker.on('error', (error) => {
+            console.error('[Stockfish Worker Error]:', error);
         });
 
-        this.process.stderr?.on('data', (data: Buffer) => {
-            console.error('[Stockfish Error]:', data.toString());
-        });
-
-        this.process.on('close', () => {
-            this.process = null;
+        this.worker.on('exit', (code) => {
+            this.worker = null;
             this.isReady = false;
         });
 
         // Initialize UCI
-        await this.sendCommand('uci', 'uciok');
-        await this.sendCommand('isready', 'readyok');
+        await this.sendCommandAndWait('uci', 'uciok');
+        await this.sendCommandAndWait('isready', 'readyok');
         this.isReady = true;
     }
 
@@ -68,10 +71,10 @@ export class StockfishEngine {
      * Stop the stockfish engine
      */
     public stop(): void {
-        if (this.process) {
-            this.sendRaw('quit');
-            this.process.kill();
-            this.process = null;
+        if (this.worker) {
+            this.postMessage('quit');
+            this.worker.terminate();
+            this.worker = null;
             this.isReady = false;
         }
     }
@@ -80,20 +83,22 @@ export class StockfishEngine {
      * Set engine options
      */
     public async setOptions(options: StockfishOptions): Promise<void> {
+        if (!this.worker) return;
+
         if (options.skillLevel !== undefined) {
-            this.sendRaw(`setoption name Skill Level value ${options.skillLevel}`);
+            this.postMessage(`setoption name Skill Level value ${options.skillLevel}`);
         }
         if (options.multiPV !== undefined) {
-            this.sendRaw(`setoption name MultiPV value ${options.multiPV}`);
+            this.postMessage(`setoption name MultiPV value ${options.multiPV}`);
         }
-        await this.sendCommand('isready', 'readyok');
+        await this.sendCommandAndWait('isready', 'readyok');
     }
 
     /**
      * Set the board position using FEN
      */
     public setPosition(fen: string): void {
-        this.sendRaw(`position fen ${fen}`);
+        this.postMessage(`position fen ${fen}`);
     }
 
     /**
@@ -101,9 +106,9 @@ export class StockfishEngine {
      */
     public setPositionFromMoves(moves: string[]): void {
         if (moves.length === 0) {
-            this.sendRaw('position startpos');
+            this.postMessage('position startpos');
         } else {
-            this.sendRaw(`position startpos moves ${moves.join(' ')}`);
+            this.postMessage(`position startpos moves ${moves.join(' ')}`);
         }
     }
 
@@ -118,7 +123,7 @@ export class StockfishEngine {
                 : 'go depth 15';
 
         return new Promise((resolve, reject) => {
-            let result: Partial<AnalysisResult> = {
+            const result: AnalysisResult = {
                 bestMove: '',
                 evaluation: 0,
                 depth: 0,
@@ -126,7 +131,12 @@ export class StockfishEngine {
                 multiPV: []
             };
 
-            const handleLine = (line: string) => {
+            const timeoutId = setTimeout(() => {
+                this.messageHandler = () => { };
+                reject(new Error('Stockfish search timeout'));
+            }, 30000);
+
+            this.messageHandler = (line: string) => {
                 // Parse info lines for evaluation
                 if (line.startsWith('info')) {
                     const depthMatch = line.match(/depth (\d+)/);
@@ -136,75 +146,66 @@ export class StockfishEngine {
 
                     if (depthMatch) result.depth = parseInt(depthMatch[1] ?? '0');
                     if (scoreMatch) result.evaluation = parseInt(scoreMatch[1] ?? '0');
-                    if (mateMatch) result.evaluation = parseInt(mateMatch[1] ?? '0') > 0 ? 10000 : -10000;
+                    if (mateMatch) {
+                        const mateIn = parseInt(mateMatch[1] ?? '0');
+                        result.evaluation = mateIn > 0 ? 10000 : -10000;
+                    }
                     if (pvMatch) result.pv = pvMatch[1]?.split(' ') ?? [];
                 }
 
                 // Parse bestmove
                 if (line.startsWith('bestmove')) {
+                    clearTimeout(timeoutId);
                     const moveMatch = line.match(/bestmove (\S+)/);
                     if (moveMatch) {
-                        result.bestMove = moveMatch[1];
+                        result.bestMove = moveMatch[1] ?? '';
                     }
-                    resolve(result as AnalysisResult);
+                    this.messageHandler = () => { };
+                    resolve(result);
                 }
             };
 
-            // Set up temporary listener
-            const originalHandler = this.handleOutput.bind(this);
-            this.handleOutput = (data: string) => {
-                const lines = data.split('\n');
-                for (const line of lines) {
-                    if (line.trim()) handleLine(line.trim());
-                }
-            };
-
-            this.sendRaw(searchCmd);
-
-            // Timeout after 30 seconds
-            setTimeout(() => {
-                this.handleOutput = originalHandler;
-                reject(new Error('Stockfish search timeout'));
-            }, 30000);
+            this.postMessage(searchCmd);
         });
     }
 
     /**
-     * Send a raw UCI command
+     * Post a message to the worker
      */
-    private sendRaw(command: string): void {
-        if (this.process?.stdin) {
-            this.process.stdin.write(command + '\n');
+    private postMessage(message: string): void {
+        if (this.worker) {
+            this.worker.postMessage(message);
         }
     }
 
     /**
      * Send a command and wait for a specific response
      */
-    private sendCommand(command: string, waitFor: string): Promise<string> {
+    private sendCommandAndWait(command: string, waitFor: string): Promise<void> {
         return new Promise((resolve) => {
-            const buffer: string[] = [];
+            const originalHandler = this.messageHandler;
 
-            const checkOutput = (data: string) => {
-                buffer.push(data);
-                if (data.includes(waitFor)) {
-                    resolve(buffer.join('\n'));
+            this.messageHandler = (line: string) => {
+                if (line.includes(waitFor)) {
+                    this.messageHandler = originalHandler;
+                    resolve();
                 }
             };
 
-            const originalHandler = this.handleOutput.bind(this);
-            this.handleOutput = (data: string) => {
-                checkOutput(data);
-            };
-
-            this.sendRaw(command);
+            this.postMessage(command);
         });
     }
 
     /**
-     * Handle stdout output from stockfish
+     * Handle messages from the worker
      */
-    private handleOutput(data: string): void {
-        this.outputBuffer += data;
+    private handleMessage(data: string): void {
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed) {
+                this.messageHandler(trimmed);
+            }
+        }
     }
 }
