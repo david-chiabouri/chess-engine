@@ -1,0 +1,17 @@
+{
+  "name": "chess-engine",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/blessed": "^0.1.27",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "stockfish": "^17.1.0"
+  }
+}
