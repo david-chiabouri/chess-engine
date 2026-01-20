@@ -3,11 +3,19 @@ import { ChessBoard, type ChessBoardTile } from "./chess-board";
 import { ChessEngine, type ChessGameState, type ChessBoardMove, type ChessGameTeam } from "./chess-engine";
 import { PieceType } from "./piece-type.enums";
 
+/**
+ * Validates and Parsing Standard Algebraic Notation (SAN).
+ * Handles the conversion between human-readable moves (e.g. "Nf3", "O-O") 
+ * and engine-level coordinate moves.
+ */
 export class ChessNotation {
 
     /**
      * Parses a Standard Algebraic Notation (SAN) move string into a ChessBoardMove.
      * Examples: "e4", "Nf3", "exf4", "O-O", "Nbd7"
+     * 
+     * @param gameState Current state to validate disambiguation context
+     * @param san The string to parse
      */
     public static parseMove(gameState: ChessGameState, san: string): ChessBoardMove {
         const cleanSan = san.replace(/[+#]/g, ''); // Remove check/mate indicators

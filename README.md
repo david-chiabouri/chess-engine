@@ -1,16 +1,41 @@
-# Chess Engine
+# Chess Engine (TypeScript/Bun)
 
 A flexible, open-source chess engine written in TypeScript for the Bun runtime. Features a modular architecture supporting custom board sizes, personality-driven AI opponents, and a terminal-based UI.
 
 ## Features
 
-- **Flexible Board System**: Any board size (not just 8x8), with bit-packed tile representation
-- **Full Move Validation**: Castling, en passant, pawn promotion, check detection
-- **Standard Algebraic Notation (SAN)**: Parse and generate human-readable moves
-- **FEN Support**: Convert game states to/from Forsyth–Edwards Notation
-- **Personality AI**: Stockfish-powered AI with Big Five personality traits
-- **Terminal UI**: Interactive chess games with blessed-based TUI
-- **Game Replay**: Step through historical games move by move
+### Core Engine
+- **Flexible Board System**: Support for any board dimensions (e.g., 5x5, 10x10), not just standard 8x8.
+- **Bit-Packed Representation**: Efficient memory usage for board tiles.
+- **FEN Support**: Full import/export of game states using Forsyth–Edwards Notation.
+- **Robust Move Validation**:
+    - Legal moves for all standard pieces (Pawn, Knight, Bishop, Rook, Queen, King).
+    - En Passant capture.
+    - Pawn promotion.
+    - **Safe Castling**: Correctly prevents castling through check, out of check, or into check.
+    - **Strict Pawn Rules**: Double moves are only allowed from the starting rank.
+
+### AI & Personality
+- **Persona System**: AI opponents with "Big Five" personality traits (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism).
+- **Stockfish Integration** (Experimental): Wraps `stockfish.js` to provide strong chess moves.
+- **Game Modes**:
+    - **Interactive**: Play against the engine in your terminal.
+    - **Demo/Replay**: Watch historical games (e.g., "The Immortal Game").
+    - **Minigames**: "Promotion" scenarios.
+
+## Gallery
+
+![Showcase](showcase.png)
+![Showcase 1](showcase1.png)
+![Showcase 2](showcase2.png)
+
+## Limitations
+
+### Stockfish Dependencies
+The `StockfishWorker` relies on specific file paths within `node_modules`.
+- It looks for `stockfish-nnue-16-single.js` or `stockfish-17.1-lite...`.
+- If these files are missing (e.g., due to package version differences), the AI will fail to initialize.
+- The worker uses runtime patching to bypass `worker_threads` checks in Bun. This is fragile.
 
 ## Installation
 
@@ -18,248 +43,108 @@ A flexible, open-source chess engine written in TypeScript for the Bun runtime. 
 bun install
 ```
 
-## Quick Start
+## Library Quick Start
 
-### Play an Interactive Game
-```bash
-bun run src/app/interactive-game.ts
-```
+Use the engine programmatically in your own TypeScript projects.
 
-### Play Against AI
-```bash
-bun run demo/ai-game.demo.ts aggressive  # or: cautious, chaotic, balanced
-```
+### 1. Creating a Board programmatically
 
-### Watch the Immortal Game
-```bash
-bun run demo/immortal-game.demo.ts
-```
-
----
-
-## Architecture
-
-```
-src/
-├── chess-board.ts       # ChessBoard class - flexible tile storage
-├── chess-engine.ts      # ChessEngine - move validation, game state
-├── chess-notation.ts    # SAN parsing and generation
-├── piece-type.enums.ts  # Bit-packed piece type definitions
-├── app/
-│   ├── app.ts           # ChessTui - base terminal UI class
-│   ├── game-controller.ts # GameController - shared game logic
-│   ├── game-replay.ts   # GameReplay - step through moves
-│   └── interactive-game.ts # InteractiveGame - live play
-└── persona/
-    ├── persona-ai.ts    # PersonaAI - AI with personality traits
-    └── stockfish-engine.ts # Stockfish.js wrapper
-```
-
----
-
-## Core Modules
-
-### ChessBoard
-
-Flexible board storage using `Uint8Array` with bit-packed tiles.
+You can create boards from simple 2D arrays using `ChessBoard.fromGrid`:
 
 ```typescript
 import { ChessBoard } from './src/chess-board';
 import { PieceType } from './src/piece-type.enums';
 
-// Create a 5x8 board
-const board = new ChessBoard({ width: 5, height: 8 });
+// Create a 3x3 mini-board
+const board = ChessBoard.fromGrid([
+    [PieceType.Rook, PieceType.King, PieceType.Rook], // Rank 0 (Top)
+    [PieceType.Pawn, PieceType.Pawn, PieceType.Pawn], // Rank 1
+    [null,           null,           null          ]  // Rank 2 (Empty)
+]);
 
-// Set pieces (x, y, piece, owner)
-board.setTile(0, 0, PieceType.Rook, 2);   // Black rook at a8
-board.setTile(4, 7, PieceType.King, 1);   // White king at e1
-
-// Read tiles
-const tile = board.getTile(0, 0);
-console.log(tile.piece, tile.owner_identifier);
+// Or custom objects with owners
+const gameBoard = ChessBoard.fromGrid([
+    [{ piece: PieceType.King, owner: 2 }, null],
+    [null, { piece: PieceType.King, owner: 1 }]
+]);
 ```
 
-### ChessEngine
-
-Static methods for game state management and move validation.
+### 2. Validating Moves
 
 ```typescript
 import { ChessEngine } from './src/chess-engine';
 
-// Create a new game
-const gameState = ChessEngine.newGame(board, [
-    { team_identifier: 1, player_identifiers: [1] },  // White
-    { team_identifier: 2, player_identifiers: [2] }   // Black
+// Initialize Game State
+const state = ChessEngine.newGame(board, [
+    { team_identifier: 1, player_identifiers: [1] }, // White
+    { team_identifier: 2, player_identifiers: [2] }  // Black
 ]);
 
-// Validate a move
-const valid = ChessEngine.isValidMove(gameState, 4, 6, 4, 4);  // e2 to e4
+// Check if a move is valid (from 0,0 to 0,2)
+const isValid = ChessEngine.isValidMove(state, 0, 0, 0, 2);
 
-// Apply a move
-const move = { fromX: 4, fromY: 6, toX: 4, toY: 4 };
-const newState = ChessEngine.applyMove(gameState, move);
-
-// Convert to FEN
-const fen = ChessEngine.toFEN(gameState);
-
-// Parse UCI move (e.g., from Stockfish)
-const uciMove = ChessEngine.uciToMove("e2e4");
-```
-
-### ChessNotation
-
-Parse and generate Standard Algebraic Notation.
-
-```typescript
-import { ChessNotation } from './src/chess-notation';
-
-// Parse SAN to move object
-const move = ChessNotation.parseMove(gameState, "Nf3");
-
-// Convert move to SAN
-const san = ChessNotation.moveToSAN(move, gameState);
-```
-
----
-
-## Terminal UI
-
-### GameController
-
-Base class for game modes with command handling, undo, and history.
-
-```typescript
-import { GameController } from './src/app/game-controller';
-
-class MyGame extends GameController {
-    protected handleCommand(cmd: string): void {
-        if (this.applyMove(cmd)) {
-            this.log(`Move applied: ${cmd}`);
-            this.renderBoard();
-        }
-    }
-    
-    public run(): void {
-        this.log("Welcome to my game!");
-    }
+if (isValid) {
+    const newState = ChessEngine.applyMove(state, { 
+        fromX: 0, fromY: 0, 
+        toX: 0, toY: 2 
+    });
 }
 ```
 
-**Built-in Commands**: `undo`, `restart`, `help`, `exit`
+## Usage Guide
 
-### InteractiveGame
+### 1. Interactive Play
 
-Play chess interactively in the terminal.
+Start a game against the engine in your terminal. You can choose to play as White or Black.
 
 ```bash
 bun run src/app/interactive-game.ts
 ```
+*Controls*:
+- Type moves in SAN format (e.g., `e4`, `Nf3`, `O-O`).
+- Type `undo` to revert a move.
+- Type `exit` to quit.
 
-### GameReplay
+### 2. AI Demonstrations
 
-Step through a series of moves with playback controls.
+Watch AI personalities battle or play against a specific personality.
 
-```typescript
-import { GameReplay } from './src/app/game-replay';
-
-const replay = new GameReplay([
-    "e4", "e5", "Nf3", "Nc6", "Bb5"
-]);
-replay.start();
-```
-
-**Controls**: `next`, `prev`, `play`, `pause`, `restart`
-
----
-
-## AI System
-
-### PersonaAI
-
-AI opponents with Big Five personality traits that modify playing style.
-
-```typescript
-import { PersonaAI, AGGRESSIVE_AI, BALANCED_AI } from './src/persona/persona-ai';
-
-// Use preset
-const ai = AGGRESSIVE_AI;
-
-// Or create custom
-const myAI = new PersonaAI({
-    name: "Nervous Nellie",
-    traits: {
-        openness: 0.2,          // Conventional
-        conscientiousness: 0.5, // Careful
-        extraversion: -0.3,     // Defensive
-        agreeableness: 0.1,     // Neutral
-        neuroticism: 0.8        // Cracks under pressure
-    }
-});
-
-await ai.initialize();
-const bestMove = await ai.getBestMove(fenString);
-ai.shutdown();
-```
-
-### Trait Effects
-
-| Trait | Low (-1) | High (+1) | Engine Effect |
-|-------|----------|-----------|---------------|
-| Openness | Conventional | Creative | MultiPV lines analyzed |
-| Conscientiousness | Impulsive | Careful | Search depth |
-| Extraversion | Defensive | Attacking | Move selection bias |
-| Agreeableness | Competitive | Peaceful | Draw tolerance |
-| Neuroticism | Stable | Unstable | Random moves when losing |
-
-### Preset Personalities
-
-- `AGGRESSIVE_AI` - Attacking, impatient
-- `CAUTIOUS_AI` - Defensive, methodical
-- `CHAOTIC_AI` - Unpredictable, creative
-- `BALANCED_AI` - Neutral baseline
-
----
-
-## Demos
-
-### Promotion Minigame
-5x8 board where White (King + 3 Pawns) tries to promote against Black's Rook.
-```bash
-bun run demo/promotion-minigame.demo.ts
-```
-
-### Immortal Game Replay
-The famous 1851 game between Anderssen and Kieseritzky.
-```bash
-bun run demo/immortal-game.demo.ts
-```
-
-### AI Game
-Play against a personality-driven AI.
+**Play against a Random AI**:
 ```bash
 bun run demo/ai-game.demo.ts chaotic
 ```
+*Personalities*:
+- `aggressive`: Prioritizes attacks.
+- `cautious`: plays defensively.
+- `chaotic`: Unpredictable moves.
+- `balanced`: Standard play.
 
----
+### 3. Historical Replays
 
-## Examples
+Watch the engine replay famous games move-by-move.
 
-See the `examples/` directory for more usage patterns:
+```bash
+bun run demo/immortal-game.demo.ts
+```
+*Controls*: Press Enter to step through moves.
 
-- `examples/basic-game.ts` - Set up and play a game programmatically
-- `examples/custom-board.ts` - Create non-standard board sizes
-- `examples/ai-match.ts` - Two AIs play against each other
+### 4. Running Tests
 
----
-
-## Running Tests
+The project includes a comprehensive test suite verifying the engine's compliance with chess rules.
 
 ```bash
 bun test
 ```
 
----
+## Architecture
 
-## License
+- `src/chess-board.ts`: Underlying 1D byte-array grid storage.
+- `src/chess-engine.ts`: Stateless pure functions for move logic (`isValidMove`, `applyMove`).
+- `src/chess-notation.ts`: Parser for Standard Algebraic Notation.
+- `src/persona/`: Logic for AI personalities and Stockfish interface.
 
-GNU General Public License v3.0
+## Contributing
+
+I am looking for help! Please check the `tests` folder to see how to add new scenarios.
+
+( *Documentation created with AI* )

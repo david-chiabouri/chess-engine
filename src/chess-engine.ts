@@ -38,6 +38,10 @@ export type ChessBoardMove = {
     promotion?: PieceType; // Optional: what piece to promote to
 }
 
+/**
+ * Core stateless game engine.
+ * Provides functions for move validation, state updates, and rule enforcement.
+ */
 export class ChessEngine {
 
 
@@ -56,10 +60,22 @@ export class ChessEngine {
     }
 
     /**
-     * Full move validation including path obstructions and ownership.
-     * Statelessly validates a move on any given board.
+     * Fully validates a move including:
+     * 1. Bounds check
+     * 2. Tile ownership check
+     * 3. Friendly fire check
+     * 4. Kinematic validity (can piece move that way?)
+     * 5. Path obstacles (for sliders)
+     * 6. Special rules (Pawn, Castling)
+     * 
+     * @param gameState Current game state
+     * @param fromX Source X
+     * @param fromY Source Y
+     * @param toX Destination X
+     * @param toY Destination Y
+     * @param ignoreTurn If true, allows checking moves for pieces regardless of whose turn it is (useful for check detection).
      */
-    public static isValidMove(gameState: ChessGameState, fromX: number, fromY: number, toX: number, toY: number): boolean {
+    public static isValidMove(gameState: ChessGameState, fromX: number, fromY: number, toX: number, toY: number, ignoreTurn: boolean = false): boolean {
         const board = gameState.board;
         if (board.isOutOfBounds(fromX, fromY) || board.isOutOfBounds(toX, toY)) return false;
         if (fromX === toX && fromY === toY) return false;
@@ -70,18 +86,15 @@ export class ChessEngine {
         // Cannot move an empty tile or environmental tile
         if (startTile.piece === PieceType.None || startTile.piece >= 250) return false;
 
-        // Turn check
-        // Note: We might want to allow checking validity for any player, but for a game loop, turn matters.
-        // For now, let's assume this strictly checks if the move is legal for the current state (implying turn).
-        if (gameState.participants[gameState.turn % gameState.participants.length] !== startTile.owner_identifier) {
-            // It's strictly not valid to move another player's piece or move out of turn.
-            // But for a pure "can this piece move here" check, maybe we relax this? 
-            // Let's enforce turn for now.
-            // return false; 
+        // Turn check: Only enforce if ignoreTurn is false
+        if (!ignoreTurn) {
+            const currentPlayer = gameState.participants[gameState.turn % gameState.participants.length];
+            if (currentPlayer !== startTile.owner_identifier) {
+                return false;
+            }
         }
 
         // Team Logic: Cannot capture friendly pieces (same team)
-        // Self-capture is already blocked by owner_identifier check usually, but teams extend this.
         if (endTile.owner_identifier !== 0) {
             if (ChessEngine.areTeammates(gameState, startTile.owner_identifier, endTile.owner_identifier)) {
                 return false;
@@ -104,6 +117,8 @@ export class ChessEngine {
         }
         // Special Case: Castling (King move > 1 step)
         else if (startTile.piece === PieceType.King && absDx > 1) {
+            // Castling logic involves safety checks (cannot castle through check), so we don't ignore turn usually?
+            // Actually, castling always implies "my turn", so ignoreTurn context doesn't break this.
             if (!ChessEngine.isCastlingValid(gameState, startTile, toX, toY)) {
                 return false;
             }
@@ -113,7 +128,7 @@ export class ChessEngine {
         }
 
         // 2. Path Obstruction Check (for sliders)
-        if (!!(startTile.piece & 0x4)) { // If Slider
+        if (!!(startTile.piece & 0x4)) { // If Slider (Bit 2)
             const stepX = dx === 0 ? 0 : dx / absDx;
             const stepY = dy === 0 ? 0 : dy / absDy;
 
@@ -133,22 +148,33 @@ export class ChessEngine {
         return true;
     }
 
+    /**
+     * specialized validation for Pawn movement.
+     */
     private static isValidPawnMove(gameState: ChessGameState, startTile: ChessBoardTile, endTile: ChessBoardTile, dx: number, dy: number, absDx: number, absDy: number): boolean {
+        // Determine "forward" direction based on owner.
+        // Owner 1 (White) moves UP (-1), Owner 2 (Black) moves DOWN (+1).
         const direction = (startTile.owner_identifier === 1) ? -1 : 1;
-        // TODO: This direction logic is rigid for 2 players. If we have 4 players, implementation differs. 
-        // Assuming standard 2-player orientation for now as per minimal viable product.
 
         // Forward moves are ONLY valid if destination is empty
         if (dx === 0 && (dy === direction || dy === direction * 2)) {
             if (endTile.piece !== PieceType.None && endTile.piece !== PieceType.EmptySquare) return false;
 
-            // Double move check: path must be clear and MUST BE ON STARTING RANK
-            // TODO: Add isStartingRank check if we want strict rules, standard chess implies rank 2 or 7.
-            // For now, trusting the dy === direction * 2 check combined with history/hasMoved logic if we had it.
-            // Simplified: if current pos is "start" (need board awareness). 
-            // Existing logic:
-            const intermediate = gameState.board.getTile(startTile.x! + 0, startTile.y! + direction).piece;
+            // Double move check
             if (dy === direction * 2) {
+                // 1. Must be on starting rank
+                // Owner 1 (White): Height - 2 (Standard Rank 2)
+                // Owner 2 (Black): 1 (Standard Rank 7)
+                // Note: Coordinates are 0-indexed. 
+                const height = gameState.board.getHeight();
+                const expectedStartY = (startTile.owner_identifier === 1) ? (height - 2) : 1;
+
+                if (startTile.y !== expectedStartY) {
+                    return false; // Not on starting rank
+                }
+
+                // 2. Path must be clear
+                const intermediate = gameState.board.getTile(startTile.x! + 0, startTile.y! + direction).piece;
                 if (intermediate !== PieceType.None && intermediate !== PieceType.EmptySquare) return false;
             }
         }
@@ -156,7 +182,6 @@ export class ChessEngine {
         else if (absDx === 1 && dy === direction) {
             // Normal capture
             if (endTile.piece !== PieceType.None && endTile.piece !== PieceType.EmptySquare) {
-                // Check team? (Handled in main isValidMove)
                 return true;
             }
             // En Passant
@@ -171,6 +196,9 @@ export class ChessEngine {
         return true;
     }
 
+    /**
+     * Validates castling logic including rights, path clearance, and safety (check).
+     */
     private static isCastlingValid(gameState: ChessGameState, kingTile: ChessBoardTile, toX: number, toY: number): boolean {
         // 1. Check Castling Rights
         const rights = gameState.castlingRights.get(kingTile.owner_identifier);
@@ -181,8 +209,7 @@ export class ChessEngine {
         if (dx > 0 && !rights.kingSide) return false;
         if (dx < 0 && !rights.queenSide) return false;
 
-        // 2. Path Clear (Already handled by generic slider check usually, but King isn't a slider bitwise)
-        // Explicitly check path for King.
+        // 2. Path Clear
         const step = dx > 0 ? 1 : -1;
         let checkX = kingTile.x! + step;
         while (checkX !== toX) { // Check up to king's destination
@@ -192,11 +219,51 @@ export class ChessEngine {
         }
 
         // 3. Safety Check: Cannot castle out of, through, or into check.
-        // This requires "isSquareUnderAttack" helper which is computationally expensive.
-        // Leaving placeholder for now.
-        // if (this.isSquareUnderAttack(...) || ...) return false;
+        // Squares involved: King Start, King Cross, King End.
+
+        // Start Square
+        if (ChessEngine.isSquareUnderAttack(gameState, kingTile.x!, kingTile.y!, kingTile.owner_identifier)) return false;
+
+        // Crossed Square (x + step)
+        if (ChessEngine.isSquareUnderAttack(gameState, kingTile.x! + step, kingTile.y!, kingTile.owner_identifier)) return false;
+
+        // Destination Square
+        if (ChessEngine.isSquareUnderAttack(gameState, toX, toY, kingTile.owner_identifier)) return false;
 
         return true;
+    }
+
+    /**
+     * Checks if a specific square is under attack by any enemy piece.
+     * Iterates through all board tiles to find threats.
+     * 
+     * @param gameState 
+     * @param targetX 
+     * @param targetY 
+     * @param defenderOwner The owner of the piece being attacked (to identify enemies)
+     */
+    public static isSquareUnderAttack(gameState: ChessGameState, targetX: number, targetY: number, defenderOwner: number): boolean {
+        const board = gameState.board;
+        const width = board.getWidth();
+        const height = board.getHeight();
+
+        // Iterate all tiles
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const tile = board.getTile(x, y);
+
+                // Skip empty or friendly
+                if (tile.piece === PieceType.None || tile.piece === PieceType.EmptySquare || tile.piece >= 250) continue;
+                if (ChessEngine.areTeammates(gameState, tile.owner_identifier, defenderOwner)) continue; // Friendly
+
+                // Check if this piece can move to target
+                // We use isValidMove with ignoreTurn=true
+                if (ChessEngine.isValidMove(gameState, x, y, targetX, targetY, true)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static areTeammates(gameState: ChessGameState, p1: number, p2: number): boolean {
@@ -210,14 +277,13 @@ export class ChessEngine {
 
     /**
      * Pure function to check if a piece's shape/capability allows this offset.
-     * (Unchanged mostly, essentially just geometry)
      */
     private static isKinematicallyValid(piece: PieceType, dx: number, dy: number, owner: number): boolean {
         const absDx = Math.abs(dx);
         const absDy = Math.abs(dy);
         const maxDelta = Math.max(absDx, absDy);
 
-        if (piece & 0x8) {
+        if (piece & 0x8) { // Special Types
             if (piece === PieceType.Knight) {
                 return (absDx === 1 && absDy === 2) || (absDx === 2 && absDy === 1);
             }
@@ -225,11 +291,7 @@ export class ChessEngine {
                 // Handled in specific pawn logic now, but returning true for basic step for fallback
                 return false; // Pawn logic is complex, delegating to main loop
             }
-            // King (moved check here from general sliders if desired, but King is 0x1 | 0x2)
-            // King is not 0x8 (Special) usually in this enum? 
-            // Wait, Enums: King = 0x1 | 0x2 = 3. Not 8.
-            // Pawn = 0x8 | 0x1 = 9. Knight = 0x8 | 0x0 = 8.
-            // So King falls through to diagonal/orthogonal checks below.
+            // King is NOT 0x8. King is 0x1 | 0x2 = 3.
             return false;
         }
 
@@ -260,9 +322,7 @@ export class ChessEngine {
 
         // 3. Handle Promotion
         if (piece === PieceType.Pawn && move.promotion) {
-            // Validate rank? (Assume isValidMove checked it or we assume valid input for applyMove context)
-            // Ideally we should check if it's the last rank.
-            // For now, if promotion is requested and it's a pawn, we apply it.
+            // If checking validity, ensuring it's the last rank would be good usage.
             finalPiece = move.promotion;
         }
 
@@ -283,47 +343,23 @@ export class ChessEngine {
         if (piece === PieceType.King && Math.abs(move.toX - move.fromX) > 1) {
             const dx = move.toX - move.fromX;
             const y = move.fromY; // Rank doesn't change
-            // KingSide
-            if (dx > 0) {
-                // Move Rook from x+3 (or corner) to x+1?
-                // Standard board: King 4, Rook 7. Target 6. Rook -> 5.
-                // We need to find the rook. Assuming standard chess layout.
-                // Or we search for the nearest rook in that direction.
-                // Simple assumption: Rook is at the edge.
-                const rookX = gameState.board['width'] - 1; // get from check?
-                // Let's assume standard 8x8 or similar logic: Rook is at the end of the board?
-                // Better: scan for rook or 'expected' rook pos.
-                // For custom boards, we might need to know WHERE the rook is.
-                // For now, let's assume standard width-1.
-                // But wait, the king might not be at 4.
+            // KingSide (dx > 0) or QueenSide (dx < 0)
 
-                // Let's iterate outwards from King to find the Rook to move? 
-                // isValidMove checked path clear.
-                // We just need to move the rook to King.x - 1 (for QueenSide) or King.x + 1 (for KingSide)?
-                // No, standard castling: King moves 2 squares. Rook jumps over.
+            const rookDestX = dx > 0 ? move.toX - 1 : move.toX + 1;
 
-                // King: fromX -> toX.
-                // Rook: Outer -> toX - 1 (KingSide) or toX + 1 (QueenSide).
+            // Find source Rook.
+            // Scan from destination outwards
+            const step = dx > 0 ? 1 : -1;
+            let rookSrcX = move.toX + step;
+            while (newBoard.getTile(rookSrcX, y).piece === PieceType.EmptySquare && !newBoard.isOutOfBounds(rookSrcX, y)) {
+                rookSrcX += step;
+            }
 
-                const rookDestX = dx > 0 ? move.toX - 1 : move.toX + 1;
-
-                // Find source Rook.
-                // Iterate from edge?
-                // Simplest: The rook that enabled the castling right.
-                // We don't store WHICH rook.
-                // Let's scan from the direction of movement.
-                const step = dx > 0 ? 1 : -1;
-                let rookSrcX = move.toX + step;
-                while (newBoard.getTile(rookSrcX, y).piece === PieceType.EmptySquare && !newBoard.isOutOfBounds(rookSrcX, y)) {
-                    rookSrcX += step;
-                }
-
-                // found potential rook
-                const rookTile = newBoard.getTile(rookSrcX, y);
-                if (rookTile.piece === PieceType.Rook) { // Should be a rook
-                    newBoard.setTile(rookDestX, y, PieceType.Rook, owner);
-                    newBoard.setTile(rookSrcX, y, PieceType.EmptySquare, 0);
-                }
+            // found potential rook
+            const rookTile = newBoard.getTile(rookSrcX, y);
+            if (rookTile.piece === PieceType.Rook) {
+                newBoard.setTile(rookDestX, y, PieceType.Rook, owner);
+                newBoard.setTile(rookSrcX, y, PieceType.EmptySquare, 0);
             }
         }
 
@@ -339,15 +375,15 @@ export class ChessEngine {
         }
         // If Rook moves, lose specific right
         if (piece === PieceType.Rook) {
-            const rights = newCastlingRights.get(owner);
-            if (rights) {
-                // Determine side
-                // Need start positions to be sure? 
-                // For now, assume if it's left of king -> queen side.
-                // This requires knowing king pos or relative pos.
-                // Heuristic: specific columns?
-                // Let's do nothing for now on Rook move unless we track Rooks perfectly.
-                // TODO: Exact Rook tracking.
+            // Need to know WHICH rook.
+            // Heuristic: If we move a Rook from x=0 (Queenside?) or x=Width-1 (Kingside?)
+            if (move.fromX === 0) {
+                const rights = newCastlingRights.get(owner);
+                if (rights) newCastlingRights.set(owner, { ...rights, queenSide: false });
+            }
+            else if (move.fromX === gameState.board.getWidth() - 1) {
+                const rights = newCastlingRights.get(owner);
+                if (rights) newCastlingRights.set(owner, { ...rights, kingSide: false });
             }
         }
 
