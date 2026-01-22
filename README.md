@@ -1,6 +1,8 @@
 # Chess Engine (TypeScript/Bun)
 
-A flexible, open-source chess engine written in TypeScript for the Bun runtime. Features a modular architecture supporting custom board sizes, personality-driven AI opponents, and a terminal-based UI.
+![Status](https://img.shields.io/badge/Status-Research_Prototype-blue)
+
+A flexible, open-source chess engine written in TypeScript for the Bun runtime. Features a modular architecture supporting custom board sizes, personality-driven AI opponents, and a terminal-based UI. It's only a prototype in its current stage. The stockfish engine is not working but there are plans to fix through getting the native Bun WASM capabilities to actually work with the stockfish web assembly files.
 
 ## Installation
 
