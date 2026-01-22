@@ -127,4 +127,4 @@ The `StockfishWorker` relies on specific file paths within `node_modules` and us
 
 I am looking for help! Please check the `tests` folder to see how to add new scenarios.
 
-( *Documentation created with AI* )
+( *Documentation created with the help of AI* )
